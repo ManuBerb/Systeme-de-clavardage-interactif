@@ -1,0 +1,8 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="INF3405_Labo1:jar">
+    <output-path>$PROJECT_DIR$/out/artifacts/INF3405_Labo1_jar</output-path>
+    <root id="archive" name="INF3405_Labo1.jar">
+      <element id="module-output" name="INF3405_Labo1" />
+    </root>
+  </artifact>
+</component>
