@@ -1,60 +1,114 @@
-import java.io.*;
 import java.net.*;
+import java.io.*;
 import java.util.*;
 import java.text.SimpleDateFormat;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class Serveur {
-    private static final int PORT = 5000;
-    private static final Map<String, String> userDatabase = new HashMap<>(); // username -> password
-    private static final List<String> messageHistory = new ArrayList<>();
+    private static final int MIN_PORT = 5000;
+    private static final int MAX_PORT = 5050;
+    private static final Map<String, String> users = new ConcurrentHashMap<>();
+    private static final List<String> chatHistory = new ArrayList<>();
+    private static final Set<PrintWriter> clientOutputs = Collections.synchronizedSet(new HashSet<>());
 
     public static void main(String[] args) {
-        try (ServerSocket serverSocket = new ServerSocket(PORT)) {
-            System.out.println("Serveur en écoute sur le port " + PORT);
-            while (!serverSocket.isClosed()) {
-                Socket clientSocket = serverSocket.accept();
-                new ClientHandler(clientSocket).start();
+        Scanner scanner = new Scanner(System.in);
+
+        System.out.print("Entrez l'adresse IP du serveur: ");
+        String serverIP = scanner.nextLine();
+        while (!isValidIP(serverIP)) {
+            System.out.print("Adresse IP invalide. Réessayez: ");
+            serverIP = scanner.nextLine();
+        }
+
+        System.out.print("Entrez le port du serveur (5000-5050): ");
+        int port = scanner.nextInt();
+        while (port < MIN_PORT || port > MAX_PORT) {
+            System.out.print("Port invalide. Réessayez: ");
+            port = scanner.nextInt();
+        }
+
+        scanner.nextLine(); // Nettoyer le buffer
+
+        try (ServerSocket serverSocket = new ServerSocket(port, 50, InetAddress.getByName(serverIP))) {
+            System.out.println("Serveur démarré sur " + serverIP + ":" + port);
+
+            while (true) {
+                new ClientHandler(serverSocket.accept()).start();
             }
         } catch (IOException e) {
-            System.err.println("Erreur serveur: " + e.getMessage());
+            System.out.println("Erreur lors du démarrage du serveur: " + e.getMessage());
         }
     }
 
-    static class ClientHandler extends Thread {
+    private static boolean isValidIP(String ip) {
+        return ip.matches("\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b");
+    }
+
+    private static class ClientHandler extends Thread {
         private final Socket socket;
+        private PrintWriter output;
+        private String username;
+        private static final SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd@HH:mm:ss");
 
         public ClientHandler(Socket socket) {
             this.socket = socket;
         }
 
-        @Override
         public void run() {
-            try (BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                 PrintWriter out = new PrintWriter(socket.getOutputStream(), true)) {
+            try {
+                BufferedReader input = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                output = new PrintWriter(socket.getOutputStream(), true);
 
-                String credentials = in.readLine();
-                String[] parts = credentials.split(",");
-                String username = parts[0];
-                String password = parts[1];
+                output.println("Entrez votre nom d'utilisateur et mot de passe (format: username,password)");
+                String[] credentials = input.readLine().split(",");
+                username = credentials[0];
+                String password = credentials[1];
 
-                if (userDatabase.containsKey(username) && !userDatabase.get(username).equals(password)) {
-                    out.println("ERROR");
+                if (!users.containsKey(username)) {
+                    users.put(username, password);
+                } else if (!users.get(username).equals(password)) {
+                    output.println("ERROR");
+                    socket.close();
                     return;
-                } else {
-                    userDatabase.put(username, password);
-                    out.println("SUCCESS");
                 }
 
-                messageHistory.forEach(out::println);
+                output.println("Connexion réussie.");
+                clientOutputs.add(output);
+                sendChatHistory(output);
+
                 String message;
-                while ((message = in.readLine()) != null) {
-                    String timestamp = new SimpleDateFormat("yyyy-MM-dd@HH:mm:ss").format(new Date());
-                    String formattedMessage = String.format("[%s - %s:%d - %s]: %s", username, socket.getInetAddress(), socket.getPort(), timestamp, message);
+                while ((message = input.readLine()) != null) {
+                    if (message.equalsIgnoreCase("/exit")) {
+                        break;
+                    }
+                    String timestamp = dateFormat.format(new Date());
+                    String formattedMessage = "[" + username + " - " + socket.getInetAddress() + ":" + socket.getPort() + " - " + timestamp + "] " + message;
                     System.out.println(formattedMessage);
-                    messageHistory.add(formattedMessage);
+                    chatHistory.add(formattedMessage);
+                    broadcastMessage(formattedMessage);
                 }
             } catch (IOException e) {
-                System.err.println("Erreur avec le client: " + e.getMessage());
+                System.out.println("Erreur avec le client: " + username);
+            } finally {
+                try {
+                    socket.close();
+                } catch (IOException e) {
+                    System.out.println("Erreur lors de la fermeture de connexion.");
+                }
+                clientOutputs.remove(output);
+            }
+        }
+
+        private void sendChatHistory(PrintWriter output) {
+            for (String msg : chatHistory.subList(Math.max(chatHistory.size() - 15, 0), chatHistory.size())) {
+                output.println(msg);
+            }
+        }
+
+        private void broadcastMessage(String message) {
+            for (PrintWriter writer : clientOutputs) {
+                writer.println(message);
             }
         }
     }
